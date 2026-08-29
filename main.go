@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"os"
 	"strings"
@@ -23,10 +22,6 @@ func main() {
 	savePath := os.Args[1]
 	urls := os.Args[2:]
 
-	if err := os.MkdirAll(savePath, os.ModePerm); err != nil {
-		log.Fatal(err)
-	}
-
 	fmt.Println("Директория для сохранения:", savePath)
 	fmt.Println("URL для скачивания:")
 	for _, url := range urls {
@@ -40,6 +35,10 @@ func main() {
 }
 
 func downloadFile(url, savePath string) error {
+	if err := os.MkdirAll(savePath, os.ModePerm); err != nil {
+		return err
+	}
+
 	resp, err := http.Get(url)
 	if err != nil {
 		return err
