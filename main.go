@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 )
 
 func main() {
@@ -23,15 +24,22 @@ func main() {
 	urls := os.Args[2:]
 
 	fmt.Println("Директория для сохранения:", savePath)
-	fmt.Println("URL для скачивания:")
+
+	wg := sync.WaitGroup{}
+	wg.Add(len(urls))
 	for _, url := range urls {
-		fmt.Println("Скачивание:", url)
-		if err := downloadFile(url, savePath); err != nil {
-			fmt.Println(err)
-		} else {
-			fmt.Println("Файл сохранён: ", getFileNameFromURL(url))
-		}
+		go func(url string) {
+			defer wg.Done()
+			fmt.Println("Скачивание:", url)
+			if err := downloadFile(url, savePath); err != nil {
+				fmt.Println(err)
+			} else {
+				fmt.Println("Файл сохранён: ", getFileNameFromURL(url))
+			}
+		}(url)
 	}
+
+	wg.Wait()
 }
 
 func downloadFile(url, savePath string) error {
