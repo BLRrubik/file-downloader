@@ -5,8 +5,10 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 func main() {
@@ -30,7 +32,6 @@ func main() {
 	for _, url := range urls {
 		go func(url string) {
 			defer wg.Done()
-			fmt.Println("Скачивание:", url)
 			if err := downloadFile(url, savePath); err != nil {
 				fmt.Println(err)
 			} else {
@@ -47,6 +48,18 @@ func downloadFile(url, savePath string) error {
 		return err
 	}
 
+	params, err := getFileParams(url)
+	if err != nil {
+		return err
+	}
+
+	filename := getFileNameFromURL(url)
+
+	fmt.Println("Файл:", filename)
+	fmt.Println("\tРазмер:", params.Size)
+	fmt.Println("\tДокачка:", params.SupportsResume)
+	fmt.Println("Начало загрузки целиком...")
+
 	resp, err := http.Get(url)
 	if err != nil {
 		return err
@@ -57,7 +70,7 @@ func downloadFile(url, savePath string) error {
 		return fmt.Errorf("сервер вернул %d", resp.StatusCode)
 	}
 
-	file, err := os.Create(savePath + "/" + getFileNameFromURL(url))
+	file, err := os.Create(savePath + "/" + filename)
 	if err != nil {
 		return err
 	}
@@ -72,4 +85,32 @@ func getFileNameFromURL(url string) string {
 	strs := strings.Split(url, "/")
 
 	return strs[len(strs)-1]
+}
+
+type Params struct {
+	Size           int64
+	SupportsResume bool
+}
+
+func getFileParams(url string) (*Params, error) {
+	client := &http.Client{Timeout: 30 * time.Second}
+
+	resp, err := client.Head(url)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	// Размер файла
+	contentLength := resp.Header.Get("Content-Length")
+	size, _ := strconv.ParseInt(contentLength, 10, 64)
+
+	// Поддержка докачки
+	acceptRanges := resp.Header.Get("Accept-Ranges")
+	supportsResume := acceptRanges == "bytes"
+
+	return &Params{
+		Size:           size,
+		SupportsResume: supportsResume,
+	}, err
 }
