@@ -2,7 +2,11 @@ package main
 
 import (
 	"fmt"
+	"io"
+	"log"
+	"net/http"
 	"os"
+	"strings"
 )
 
 func main() {
@@ -19,9 +23,46 @@ func main() {
 	savePath := os.Args[1]
 	urls := os.Args[2:]
 
+	if err := os.Mkdir(savePath, os.ModePerm); err != nil {
+		log.Fatal(err)
+	}
+
 	fmt.Println("Директория для сохранения:", savePath)
 	fmt.Println("URL для скачивания:")
 	for _, url := range urls {
-		fmt.Println("-", url)
+		fmt.Println("Скачивание:", url)
+		if err := downloadFile(url, savePath); err != nil {
+			fmt.Println(err)
+		} else {
+			fmt.Println("Файл сохранён: ", getFileNameFromURL(url))
+		}
 	}
+}
+
+func downloadFile(url, savePath string) error {
+	resp, err := http.Get(url)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("сервер вернул %d", resp.StatusCode)
+	}
+
+	file, err := os.Create(savePath + "/" + getFileNameFromURL(url))
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	_, err = io.Copy(file, resp.Body)
+
+	return err
+}
+
+func getFileNameFromURL(url string) string {
+	strs := strings.Split(url, "/")
+
+	return strs[len(strs)-1]
 }
