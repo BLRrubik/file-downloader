@@ -23,7 +23,7 @@ func main() {
 	savePath := os.Args[1]
 	urls := os.Args[2:]
 
-	if err := os.Mkdir(savePath, os.ModePerm); err != nil {
+	if err := os.MkdirAll(savePath, os.ModePerm); err != nil {
 		log.Fatal(err)
 	}
 
