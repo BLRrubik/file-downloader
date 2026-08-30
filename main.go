@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -10,6 +11,15 @@ import (
 	"sync"
 	"time"
 )
+
+const chunkSize = 100 << 10
+
+type DownloadState struct {
+	URL         string `json:"url"`
+	TotalSize   int64  `json:"total_size"`
+	ChunkSize   int    `json:"chunk_size"`
+	TotalChunks int    `json:"total_chunks"`
+}
 
 func main() {
 	// os.Args для команды: ./downloader ./downloads http://example.com/file.zip
@@ -52,8 +62,18 @@ func downloadFile(url, savePath string) error {
 	if err != nil {
 		return err
 	}
+	totalChunks := (params.Size + chunkSize - 1) / chunkSize
 
 	filename := getFileNameFromURL(url)
+
+	state := DownloadState{
+		URL:         url,
+		TotalSize:   params.Size,
+		ChunkSize:   chunkSize,
+		TotalChunks: int(totalChunks),
+	}
+	data, _ := json.MarshalIndent(state, "", "  ")
+	os.WriteFile(filename+".progress", data, 0644)
 
 	fmt.Println("Файл:", filename)
 	fmt.Println("\tРазмер:", params.Size)
@@ -69,11 +89,6 @@ func downloadFile(url, savePath string) error {
 		return err
 	}
 
-	const chunkSize = 100 << 10 // 10 KB
-
-	totalChunks := (params.Size + chunkSize - 1) / chunkSize
-	fmt.Println("Размер чанка:", chunkSize, "байт")
-	fmt.Println("Количество чанков:", totalChunks)
 	for i := range totalChunks {
 		start := i * chunkSize
 		end := start + chunkSize - 1
