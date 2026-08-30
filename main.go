@@ -58,6 +58,26 @@ func downloadFile(url, savePath string) error {
 	fmt.Println("Файл:", filename)
 	fmt.Println("\tРазмер:", params.Size)
 	fmt.Println("\tДокачка:", params.SupportsResume)
+
+	const chunkSize = 100 << 10 // 10 KB
+
+	totalChunks := (params.Size + chunkSize - 1) / chunkSize
+	fmt.Println("Размер чанка:", chunkSize, "байт")
+	fmt.Println("Количество чанков:", totalChunks)
+	for i := range totalChunks {
+		fmt.Printf("Чанк %d/%d: байты %d-%d\n", i+1, totalChunks, i*chunkSize, (i+1)*chunkSize-1)
+	}
+
+	file, err := os.Create(savePath + "/" + filename)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	if err = file.Truncate(params.Size); err != nil {
+		return err
+	}
+
 	fmt.Println("Начало загрузки целиком...")
 
 	resp, err := http.Get(url)
@@ -69,12 +89,6 @@ func downloadFile(url, savePath string) error {
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("сервер вернул %d", resp.StatusCode)
 	}
-
-	file, err := os.Create(savePath + "/" + filename)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
 
 	_, err = io.Copy(file, resp.Body)
 
