@@ -65,7 +65,12 @@ func downloadFile(url, savePath string) error {
 	fmt.Println("Размер чанка:", chunkSize, "байт")
 	fmt.Println("Количество чанков:", totalChunks)
 	for i := range totalChunks {
-		fmt.Printf("Чанк %d/%d: байты %d-%d\n", i+1, totalChunks, i*chunkSize, (i+1)*chunkSize-1)
+		start := i * chunkSize
+		end := start + chunkSize - 1
+		if end > params.Size-1 {
+			end = params.Size - 1
+		}
+		fmt.Printf("Чанк %d/%d: байты %d-%d\n", i+1, totalChunks, start, end)
 	}
 
 	file, err := os.Create(savePath + "/" + filename)
