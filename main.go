@@ -78,7 +78,7 @@ func downloadFile(url, savePath string) error {
 	if _, err = os.Stat(progressFile); err == nil {
 		data, _ := os.ReadFile(progressFile)
 		json.Unmarshal(data, &state)
-	} else {
+	} else if os.IsNotExist(err) {
 		state = DownloadState{
 			File:             progressFile,
 			URL:              url,
