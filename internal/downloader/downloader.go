@@ -1,14 +1,21 @@
 package downloader
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"io"
+	"math/rand"
 	"net/http"
 	"os"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/vbauerster/mpb/v8"
+	"github.com/vbauerster/mpb/v8/decor"
+	"golang.org/x/sync/errgroup"
 )
 
 const (
@@ -27,13 +34,19 @@ type Downloader struct {
 
 	maxConcurrentChunks int
 
-	httpClient *http.Client
+	httpClient  *http.Client
+	pBarManager *mpb.Progress
 }
 
-func NewDownloader(maxConcurrentChunks int, client *http.Client) *Downloader {
+func NewDownloader(
+	maxConcurrentChunks int,
+	client *http.Client,
+	pBarManager *mpb.Progress,
+) *Downloader {
 	return &Downloader{
 		maxConcurrentChunks: maxConcurrentChunks,
 		httpClient:          client,
+		pBarManager:         pBarManager,
 	}
 }
 
@@ -42,6 +55,9 @@ func (d *Downloader) Download(urls []string, savePath string) error {
 		return err
 	}
 
+	var mu sync.Mutex
+	var resErr error
+
 	wg := sync.WaitGroup{}
 
 	for _, url := range urls {
@@ -49,26 +65,26 @@ func (d *Downloader) Download(urls []string, savePath string) error {
 		go func(url string) {
 			defer wg.Done()
 
-			if err := d.downloadURL(url, savePath); err != nil {
-				fmt.Println("Ошибка при скачивании", url, ":", err)
-
-				return
+			if err := d.downloadURL(context.Background(), url, savePath); err != nil {
+				mu.Lock()
+				resErr = errors.Join(resErr, err)
+				mu.Unlock()
 			}
 		}(url)
 	}
 
 	wg.Wait()
 
-	return nil
+	return resErr
 }
 
-func (d *Downloader) downloadURL(url, savePath string) error {
+func (d *Downloader) downloadURL(ctx context.Context, url, savePath string) error {
 	filename := getFileNameFromURL(url)
 	progressFile := filename + ".progress"
 
 	params, err := d.getFileParams(url)
 	if err != nil {
-		return fmt.Errorf("ошибка при получении параметров файла: %v", err)
+		return fmt.Errorf("%s: ошибка при получении параметров файла: %w", filename, err)
 	}
 
 	state, err := StateFromFile(progressFile)
@@ -84,42 +100,38 @@ func (d *Downloader) downloadURL(url, savePath string) error {
 				DownloadedChunks: make([]Chunk, int((params.Size+chunkSize-1)/chunkSize)),
 			}
 		default:
-			return fmt.Errorf("ошибка при чтении состояния: %v", err)
+			return fmt.Errorf("%s: ошибка при чтении состояния: %w", filename, err)
 		}
 	}
 
 	file, err := os.Create(savePath + "/" + filename)
 	if err != nil {
-		return err
+		return fmt.Errorf("%s: %w", filename, err)
 	}
 	defer file.Close()
 
 	if err = file.Truncate(params.Size); err != nil {
-		return err
+		return fmt.Errorf("%s: %w", filename, err)
 	}
 
 	d.prepareChunks(state)
 
+	bar := d.prepareBar(state, params, filename)
+
+	g, ctx := errgroup.WithContext(ctx)
 	chunkCh := make(chan int)
 
-	wg := sync.WaitGroup{}
 	for range d.maxConcurrentChunks {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		g.Go(func() error {
 			for chunkIdx := range chunkCh {
 				chunk := state.DownloadedChunks[chunkIdx]
 
 				if chunk.Completed {
-					fmt.Println("Чанк", chunkIdx+1, "уже скачан, пропускаем...")
-
 					continue
 				}
 
-				if err = d.downloadChunk(url, file, chunk.Start, chunk.End); err != nil {
-					fmt.Println("Ошибка при скачивании чанка", chunkIdx+1, ":", err)
-
-					continue
+				if err = d.downloadChunkWithRetries(ctx, url, file, chunk.Start, chunk.End); err != nil {
+					return fmt.Errorf("чанк %d: %w", chunkIdx, err)
 				}
 
 				state.Lock()
@@ -127,18 +139,32 @@ func (d *Downloader) downloadURL(url, savePath string) error {
 				state.Save()
 				state.Unlock()
 
-				fmt.Println("Чанк", chunkIdx+1, "скачан успешно")
+				bar.IncrBy(int(chunk.End - chunk.Start + 1))
 			}
-		}()
+
+			return nil
+		})
 	}
 
-	for i := range state.DownloadedChunks {
-		chunkCh <- i
+	g.Go(func() error {
+		defer close(chunkCh)
+
+		for i := range state.DownloadedChunks {
+			select {
+			case chunkCh <- i:
+			case <-ctx.Done():
+				return nil
+			}
+		}
+
+		return nil
+	})
+
+	if err = g.Wait(); err != nil {
+		bar.Abort(false)
+
+		return fmt.Errorf("ошибка при скачивании %s: %w", filename, err)
 	}
-
-	close(chunkCh)
-
-	wg.Wait()
 
 	return nil
 }
@@ -164,17 +190,42 @@ func (d *Downloader) prepareChunks(state *DownloadState) {
 	state.Save()
 }
 
-func (d *Downloader) downloadChunkWithRetries(url string, file *os.File, start, end int64) error {
+func (d *Downloader) prepareBar(state *DownloadState, params *Params, filename string) *mpb.Bar {
+	var alreadyDone int64
+	for _, chunk := range state.DownloadedChunks {
+		if chunk.Completed {
+			alreadyDone += chunk.End - chunk.Start + 1
+		}
+	}
+
+	bar := d.pBarManager.AddBar(
+		params.Size,
+		mpb.PrependDecorators(decor.Name(filename)),
+		mpb.AppendDecorators(decor.OnAbort(decor.Percentage(), "ошибка")),
+	)
+	bar.SetCurrent(alreadyDone)
+
+	return bar
+}
+
+func (d *Downloader) downloadChunkWithRetries(ctx context.Context, url string, file *os.File, start, end int64) error {
 	var err error
 	for attempt := 0; attempt < maxRetries; attempt++ {
-		err = d.downloadChunk(url, file, start, end)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+
+		err = d.downloadChunk(ctx, url, file, start, end)
 		if err == nil {
 			return nil
 		}
 
 		if attempt < maxRetries-1 {
-			fmt.Printf("Ошибка, повтор через %v...\n", retryDelay)
-			time.Sleep(retryDelay)
+			select {
+			case <-time.After(retryDelay):
+			case <-ctx.Done():
+				return ctx.Err()
+			}
 		}
 	}
 
@@ -182,11 +233,13 @@ func (d *Downloader) downloadChunkWithRetries(url string, file *os.File, start, 
 }
 
 func (d *Downloader) downloadChunk(
+	ctx context.Context,
 	url string,
 	file *os.File,
 	startByte, endByte int64,
 ) error {
-	req, err := http.NewRequest("GET", url, nil)
+	time.Sleep(time.Duration(rand.Int31n(3)) * time.Second)
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return fmt.Errorf("ошибка создания запроса: %v", err)
 	}
@@ -229,6 +282,10 @@ func (d *Downloader) getFileParams(url string) (*Params, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("сервер вернул %d", resp.StatusCode)
+	}
 
 	// Размер файла
 	contentLength := resp.Header.Get("Content-Length")

@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"file-downloader/internal/downloader"
+
+	"github.com/vbauerster/mpb/v8"
 )
 
 func main() {
@@ -23,13 +25,15 @@ func main() {
 	savePath := os.Args[1]
 	urls := os.Args[2:]
 
-	fmt.Println("Директория для сохранения:", savePath)
+	pBarManager := mpb.New()
 
 	client := &http.Client{Timeout: 30 * time.Second}
-	d := downloader.NewDownloader(4, client)
+	d := downloader.NewDownloader(4, client, pBarManager)
 
 	if err := d.Download(urls, savePath); err != nil {
 		fmt.Println(err)
 		os.Exit(1)
 	}
+
+	pBarManager.Wait()
 }
