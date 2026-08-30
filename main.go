@@ -72,17 +72,24 @@ func downloadFile(url, savePath string) error {
 	totalChunks := (params.Size + chunkSize - 1) / chunkSize
 
 	filename := getFileNameFromURL(url)
+	progressFile := filename + ".progress"
 
-	state := DownloadState{
-		File:             filename + ".progress",
-		URL:              url,
-		TotalSize:        params.Size,
-		ChunkSize:        chunkSize,
-		TotalChunks:      int(totalChunks),
-		DownloadedChunks: make([]bool, totalChunks),
+	var state DownloadState
+	if _, err = os.Stat(progressFile); err == nil {
+		data, _ := os.ReadFile(progressFile)
+		json.Unmarshal(data, &state)
+	} else {
+		state = DownloadState{
+			File:             progressFile,
+			URL:              url,
+			TotalSize:        params.Size,
+			ChunkSize:        chunkSize,
+			TotalChunks:      int(totalChunks),
+			DownloadedChunks: make([]bool, totalChunks),
+		}
+
+		state.Save()
 	}
-
-	state.Save()
 
 	fmt.Println("Файл:", filename)
 	fmt.Println("\tРазмер:", params.Size)
@@ -99,12 +106,18 @@ func downloadFile(url, savePath string) error {
 	}
 
 	for i := range totalChunks {
+		fmt.Printf("Чанк %d", i+1)
+		if state.DownloadedChunks[i] {
+			fmt.Println(" - уже загружен, пропускаем")
+			continue
+		}
+
 		start := i * chunkSize
 		end := start + chunkSize - 1
 		if end > params.Size-1 {
 			end = params.Size - 1
 		}
-		fmt.Printf("Чанк %d/%d: байты %d-%d\n", i+1, totalChunks, start, end)
+
 		if err = downloadChunk(url, file, start, end); err != nil {
 			return fmt.Errorf("ошибка загрузки чанка %d: %v", i+1, err)
 		}
@@ -112,6 +125,8 @@ func downloadFile(url, savePath string) error {
 		state.DownloadedChunks[i] = true
 
 		state.Save()
+
+		fmt.Println(" - загружен")
 	}
 
 	return err
