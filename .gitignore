@@ -2,3 +2,5 @@
 tmp
 secrets
 downloads
+bin
+*.progress
