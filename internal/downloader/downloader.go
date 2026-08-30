@@ -123,26 +123,32 @@ func (d *Downloader) downloadURL(ctx context.Context, url, savePath string) erro
 
 	for range d.maxConcurrentChunks {
 		g.Go(func() error {
-			for chunkIdx := range chunkCh {
-				chunk := state.DownloadedChunks[chunkIdx]
+			for {
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case chunkIdx, ok := <-chunkCh:
+					if !ok {
+						return nil
+					}
 
-				if chunk.Completed {
-					continue
+					chunk := state.DownloadedChunks[chunkIdx]
+
+					if chunk.Completed {
+						continue
+					}
+
+					if err := d.downloadChunkWithRetries(ctx, url, file, chunk.Start, chunk.End); err != nil {
+						return fmt.Errorf("чанк %d: %w", chunkIdx, err)
+					}
+
+					state.Lock()
+					state.DownloadedChunks[chunkIdx].Completed = true
+					state.Unlock()
+
+					bar.IncrBy(int(chunk.End - chunk.Start + 1))
 				}
-
-				if err = d.downloadChunkWithRetries(ctx, url, file, chunk.Start, chunk.End); err != nil {
-					return fmt.Errorf("чанк %d: %w", chunkIdx, err)
-				}
-
-				state.Lock()
-				state.DownloadedChunks[chunkIdx].Completed = true
-				state.Save()
-				state.Unlock()
-
-				bar.IncrBy(int(chunk.End - chunk.Start + 1))
 			}
-
-			return nil
 		})
 	}
 
@@ -160,10 +166,16 @@ func (d *Downloader) downloadURL(ctx context.Context, url, savePath string) erro
 		return nil
 	})
 
-	if err = g.Wait(); err != nil {
+	waitErr := g.Wait()
+
+	state.Lock()
+	state.Save()
+	state.Unlock()
+
+	if waitErr != nil {
 		bar.Abort(false)
 
-		return fmt.Errorf("%s: ошибка при скачивании: %w", filename, err)
+		return fmt.Errorf("%s: ошибка при скачивании: %w", filename, waitErr)
 	}
 
 	return nil
