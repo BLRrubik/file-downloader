@@ -12,7 +12,11 @@ import (
 	"time"
 )
 
-const chunkSize = 100 << 10
+const (
+	chunkSize  = 100 << 10
+	maxRetries = 3
+	retryDelay = 2 * time.Second
+)
 
 type DownloadState struct {
 	File             string `json:"-"`
@@ -75,10 +79,14 @@ func downloadFile(url, savePath string) error {
 	progressFile := filename + ".progress"
 
 	var state DownloadState
-	if _, err = os.Stat(progressFile); err == nil {
+	_, err = os.Stat(progressFile)
+	switch {
+	case err == nil:
 		data, _ := os.ReadFile(progressFile)
 		json.Unmarshal(data, &state)
-	} else if os.IsNotExist(err) {
+
+		state.File = progressFile
+	case os.IsNotExist(err):
 		state = DownloadState{
 			File:             progressFile,
 			URL:              url,
@@ -89,6 +97,8 @@ func downloadFile(url, savePath string) error {
 		}
 
 		state.Save()
+	default:
+		return fmt.Errorf("ошибка проверки прогресса: %v", err)
 	}
 
 	fmt.Println("Файл:", filename)
@@ -118,8 +128,19 @@ func downloadFile(url, savePath string) error {
 			end = params.Size - 1
 		}
 
-		if err = downloadChunk(url, file, start, end); err != nil {
-			return fmt.Errorf("ошибка загрузки чанка %d: %v", i+1, err)
+		for attempt := 0; attempt < maxRetries; attempt++ {
+			err = downloadChunk(url, file, start, end)
+			if err == nil {
+				break
+			}
+
+			if attempt < maxRetries-1 {
+				fmt.Printf("Ошибка, повтор через %v...\n", retryDelay)
+				time.Sleep(retryDelay)
+			}
+		}
+		if err != nil {
+			return fmt.Errorf("не удалось скачать чанк %d: %v", i+1, err)
 		}
 
 		state.DownloadedChunks[i] = true
