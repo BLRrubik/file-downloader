@@ -15,10 +15,17 @@ import (
 const chunkSize = 100 << 10
 
 type DownloadState struct {
-	URL         string `json:"url"`
-	TotalSize   int64  `json:"total_size"`
-	ChunkSize   int    `json:"chunk_size"`
-	TotalChunks int    `json:"total_chunks"`
+	File             string `json:"-"`
+	URL              string `json:"url"`
+	TotalSize        int64  `json:"total_size"`
+	ChunkSize        int    `json:"chunk_size"`
+	TotalChunks      int    `json:"total_chunks"`
+	DownloadedChunks []bool `json:"downloaded_chunks"`
+}
+
+func (s *DownloadState) Save() {
+	data, _ := json.MarshalIndent(s, "", "  ")
+	os.WriteFile(s.File, data, 0644)
 }
 
 func main() {
@@ -67,13 +74,15 @@ func downloadFile(url, savePath string) error {
 	filename := getFileNameFromURL(url)
 
 	state := DownloadState{
-		URL:         url,
-		TotalSize:   params.Size,
-		ChunkSize:   chunkSize,
-		TotalChunks: int(totalChunks),
+		File:             filename + ".progress",
+		URL:              url,
+		TotalSize:        params.Size,
+		ChunkSize:        chunkSize,
+		TotalChunks:      int(totalChunks),
+		DownloadedChunks: make([]bool, totalChunks),
 	}
-	data, _ := json.MarshalIndent(state, "", "  ")
-	os.WriteFile(filename+".progress", data, 0644)
+
+	state.Save()
 
 	fmt.Println("Файл:", filename)
 	fmt.Println("\tРазмер:", params.Size)
@@ -99,6 +108,10 @@ func downloadFile(url, savePath string) error {
 		if err = downloadChunk(url, file, start, end); err != nil {
 			return fmt.Errorf("ошибка загрузки чанка %d: %v", i+1, err)
 		}
+
+		state.DownloadedChunks[i] = true
+
+		state.Save()
 	}
 
 	return err
