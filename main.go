@@ -145,6 +145,11 @@ func downloadChunk(
 		return fmt.Errorf("сервер вернул %d", resp.StatusCode)
 	}
 
+	_, err = file.Seek(startByte, io.SeekStart)
+	if err != nil {
+		return fmt.Errorf("ошибка перемещения указателя файла: %v", err)
+	}
+
 	_, err = io.Copy(file, resp.Body)
 	if err != nil {
 		return fmt.Errorf("ошибка записи в файл: %v", err)
