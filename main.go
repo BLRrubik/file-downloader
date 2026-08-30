@@ -59,6 +59,16 @@ func downloadFile(url, savePath string) error {
 	fmt.Println("\tРазмер:", params.Size)
 	fmt.Println("\tДокачка:", params.SupportsResume)
 
+	file, err := os.Create(savePath + "/" + filename)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	if err = file.Truncate(params.Size); err != nil {
+		return err
+	}
+
 	const chunkSize = 100 << 10 // 10 KB
 
 	totalChunks := (params.Size + chunkSize - 1) / chunkSize
@@ -71,31 +81,10 @@ func downloadFile(url, savePath string) error {
 			end = params.Size - 1
 		}
 		fmt.Printf("Чанк %d/%d: байты %d-%d\n", i+1, totalChunks, start, end)
+		if err = downloadChunk(url, file, start, end); err != nil {
+			return fmt.Errorf("ошибка загрузки чанка %d: %v", i+1, err)
+		}
 	}
-
-	file, err := os.Create(savePath + "/" + filename)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
-
-	if err = file.Truncate(params.Size); err != nil {
-		return err
-	}
-
-	fmt.Println("Начало загрузки целиком...")
-
-	resp, err := http.Get(url)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("сервер вернул %d", resp.StatusCode)
-	}
-
-	_, err = io.Copy(file, resp.Body)
 
 	return err
 }
@@ -132,4 +121,34 @@ func getFileParams(url string) (*Params, error) {
 		Size:           size,
 		SupportsResume: supportsResume,
 	}, err
+}
+
+func downloadChunk(
+	url string,
+	file *os.File,
+	startByte, endByte int64,
+) error {
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return fmt.Errorf("ошибка создания запроса: %v", err)
+	}
+
+	req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", startByte, endByte))
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("ошибка выполнения запроса: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusPartialContent {
+		return fmt.Errorf("сервер вернул %d", resp.StatusCode)
+	}
+
+	_, err = io.Copy(file, resp.Body)
+	if err != nil {
+		return fmt.Errorf("ошибка записи в файл: %v", err)
+	}
+
+	return nil
 }
