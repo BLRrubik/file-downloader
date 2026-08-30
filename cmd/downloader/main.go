@@ -1,9 +1,11 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"os"
+	"os/signal"
 	"time"
 
 	"file-downloader/internal/downloader"
@@ -22,6 +24,9 @@ func main() {
 		os.Exit(1)
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	savePath := os.Args[1]
 	urls := os.Args[2:]
 
@@ -30,10 +35,22 @@ func main() {
 	client := &http.Client{Timeout: 30 * time.Second}
 	d := downloader.NewDownloader(4, client, pBarManager)
 
-	if err := d.Download(urls, savePath); err != nil {
+	// Обработка сигнала прерывания
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt)
+
+	go func() {
+		<-sigChan
+		fmt.Println("\nПолучен сигнал прерывания, завершаем...")
+		cancel()
+	}()
+
+	err := d.Download(ctx, urls, savePath)
+
+	pBarManager.Wait()
+
+	if err != nil {
 		fmt.Println(err)
 		os.Exit(1)
 	}
-
-	pBarManager.Wait()
 }

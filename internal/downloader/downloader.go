@@ -50,7 +50,7 @@ func NewDownloader(
 	}
 }
 
-func (d *Downloader) Download(urls []string, savePath string) error {
+func (d *Downloader) Download(ctx context.Context, urls []string, savePath string) error {
 	if err := os.MkdirAll(savePath, os.ModePerm); err != nil {
 		return err
 	}
@@ -65,7 +65,7 @@ func (d *Downloader) Download(urls []string, savePath string) error {
 		go func(url string) {
 			defer wg.Done()
 
-			if err := d.downloadURL(context.Background(), url, savePath); err != nil {
+			if err := d.downloadURL(ctx, url, savePath); err != nil {
 				mu.Lock()
 				resErr = errors.Join(resErr, err)
 				mu.Unlock()
@@ -163,7 +163,7 @@ func (d *Downloader) downloadURL(ctx context.Context, url, savePath string) erro
 	if err = g.Wait(); err != nil {
 		bar.Abort(false)
 
-		return fmt.Errorf("ошибка при скачивании %s: %w", filename, err)
+		return fmt.Errorf("%s: ошибка при скачивании: %w", filename, err)
 	}
 
 	return nil
