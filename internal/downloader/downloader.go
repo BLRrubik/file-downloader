@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math/rand"
 	"net/http"
 	"os"
 	"strconv"
@@ -178,6 +177,10 @@ func (d *Downloader) downloadURL(ctx context.Context, url, savePath string) erro
 		return fmt.Errorf("%s: ошибка при скачивании: %w", filename, waitErr)
 	}
 
+	if d.checkFileFinished(state) {
+		_ = os.Remove(progressFile)
+	}
+
 	return nil
 }
 
@@ -250,7 +253,6 @@ func (d *Downloader) downloadChunk(
 	file *os.File,
 	startByte, endByte int64,
 ) error {
-	time.Sleep(time.Duration(rand.Int31n(3)) * time.Second)
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return fmt.Errorf("ошибка создания запроса: %v", err)
@@ -311,6 +313,19 @@ func (d *Downloader) getFileParams(url string) (*Params, error) {
 		Size:           size,
 		SupportsResume: supportsResume,
 	}, err
+}
+
+func (d *Downloader) checkFileFinished(state *DownloadState) bool {
+	state.Lock()
+	defer state.Unlock()
+
+	for _, chunk := range state.DownloadedChunks {
+		if !chunk.Completed {
+			return false
+		}
+	}
+
+	return true
 }
 
 func getFileNameFromURL(url string) string {
