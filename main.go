@@ -140,7 +140,7 @@ func downloadFile(url, savePath string) error {
 			}
 		}
 		if err != nil {
-			return fmt.Errorf("не удалось скачать чанк %d: %v", i+1, err)
+			continue
 		}
 
 		state.DownloadedChunks[i] = true
